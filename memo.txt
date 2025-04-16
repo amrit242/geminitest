@@ -1,0 +1,540 @@
+
+良い出来です。先ほどはモックデータを用意してもらいましたが、そのモックデータを本番データに置き換えたいと思います。
+https://www.career-shiken.org/wordpress/wp-content/uploads/26_gakka_mondai_202407061155.pdf
+このURLに含まれるPDFはキャリアコンサルタント試験の問題集で、全部で50問分の問題が含まれています。一つの質問に対して4つの選択肢がある試験形式となっています。
+このPDFから最初の10問分に関して、問題と4つの選択肢を抽出して、先ほどのモックデータ（mockQuestions.ts）を置き換えてください。
+10問分の問題に対する正答（correctAnswerIndex）は、https://www.career-shiken.org/wordpress/wp-content/uploads/26_gakka_seito_20240707125608.pdfのURLに含まれるPDFから各問題No. に対応した正答の番号を抽出してください。
+warning
+ThinkingThoughts
+The thoughts produced by the model are experimental
+Expand to view model thoughts
+chevron_right
+OKです。試験結果を振り返るための正誤表ページ（コンポーネント）を追加し、ローカルストレージに回答データを保存するように修正します。
+まず、回答データを保存するための型定義を少し更新し、正誤表を表示する新しいコンポーネントを作成します。そして、既存の Quiz コンポーネントを修正して、回答の保存と結果表示画面での正誤表の呼び出しを行います。
+1. 型定義の更新 (src/types/quizTypes.ts)
+ユーザーの回答履歴を格納するための型を追加します。
+// src/types/quizTypes.ts
+export interface Option {
+  id: string;
+  text: string;
+}
+
+export interface Question {
+  id: number;
+  questionText: string;
+  options: Option[];
+  correctAnswerId: string;
+}
+
+// ユーザーの回答履歴の型定義を追加
+export type UserAnswers = {
+  [questionId: number]: string | null; // キー: 質問ID, 値: 選択された選択肢ID (未回答ならnull)
+};
+Use code with caution.
+TypeScript
+2. 正誤表コンポーネントの作成 (src/components/ResultsTable.tsx)
+正誤表を表示するための新しいコンポーネントを作成します。
+// src/components/ResultsTable.tsx
+import React from 'react';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+  Typography,
+  Box, // Boxを追加
+} from '@mui/material';
+import { Question, UserAnswers } from '../types/quizTypes';
+
+interface ResultsTableProps {
+  questions: Question[];
+  userAnswers: UserAnswers;
+}
+
+const ResultsTable: React.FC<ResultsTableProps> = ({ questions, userAnswers }) => {
+  return (
+    // Boxで囲み、中央寄せと上マージンを設定
+    <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+        <TableContainer component={Paper} sx={{ maxWidth: 350 /* 少し幅を広げる */ }}>
+        <Table size="small">
+            <TableHead sx={{ backgroundColor: '#eee' /* ヘッダー背景色 */ }}>
+            <TableRow>
+                <TableCell align="center" sx={{ fontWeight: 'bold' }}>問題</TableCell>
+                <TableCell align="center" sx={{ fontWeight: 'bold' }}>正誤</TableCell>
+            </TableRow>
+            </TableHead>
+            <TableBody>
+            {questions.map((q) => {
+                // questionIdは数値なので、そのままキーとして使用
+                const userAnswerId = userAnswers[q.id];
+                let resultSymbol: React.ReactNode;
+                let resultColor: string;
+
+                if (userAnswerId === undefined || userAnswerId === null) {
+                // 未回答の場合
+                resultSymbol = '-';
+                resultColor = 'text.disabled'; // MUIのテーマカラー (薄いグレー)
+                } else if (userAnswerId === q.correctAnswerId) {
+                // 正解の場合
+                resultSymbol = '〇';
+                resultColor = 'success.main'; // MUIのテーマカラー (緑)
+                } else {
+                // 不正解の場合
+                resultSymbol = '×';
+                resultColor = 'error.main'; // MUIのテーマカラー (赤)
+                }
+
+                return (
+                <TableRow key={q.id} sx={{ '&:nth-of-type(odd)': { backgroundColor: '#f9f9f9' } /* 縞模様 */ }}>
+                    <TableCell align="center">問{q.id}</TableCell>
+                    <TableCell align="center">
+                    <Typography sx={{ color: resultColor, fontWeight: 'bold', fontSize: '1.2rem' /* 少し大きく */ }}>
+                        {resultSymbol}
+                    </Typography>
+                    </TableCell>
+                </TableRow>
+                );
+            })}
+            </TableBody>
+        </Table>
+        </TableContainer>
+    </Box>
+  );
+};
+
+export default ResultsTable;
+Use code with caution.
+TypeScript
+3. Quiz コンポーネントの修正 (src/components/Quiz.tsx)
+Quiz コンポーネントに以下の変更を加えます。
+ユーザーの回答履歴を管理する state (userAnswers) を追加し、ローカルストレージから初期化します。
+回答が選択され、「Next」または「Finish」が押されたときに、回答履歴 state とローカルストレージを更新します。
+試験終了時の結果表示画面で ResultsTable コンポーネントを呼び出します。
+試験をリトライする際にローカルストレージをクリアする処理を追加します。
+// src/components/Quiz.tsx
+import React, { useState, useEffect, useCallback } from 'react'; // useCallback をインポート
+import {
+  Container,
+  AppBar,
+  Toolbar,
+  IconButton,
+  Typography,
+  LinearProgress,
+  Box,
+  Card,
+  CardContent,
+  RadioGroup,
+  FormControlLabel,
+  Radio,
+  Button,
+  Fade,
+} from '@mui/material';
+import { ArrowBack as ArrowBackIcon, CheckCircleOutline, HighlightOff, ArrowForward } from '@mui/icons-material'; // ArrowForward をインポート
+import { Question, UserAnswers } from '../types/quizTypes'; // UserAnswers をインポート
+import ResultsTable from './ResultsTable'; // 作成した正誤表コンポーネントをインポート
+
+const QUIZ_ANSWERS_KEY = 'quizAnswers'; // ローカルストレージのキーを定数化
+
+interface QuizProps {
+  questions: Question[];
+  quizTitle?: string;
+  totalTimeSeconds?: number;
+}
+
+const Quiz: React.FC<QuizProps> = ({ questions, quizTitle = "Test", totalTimeSeconds = 30 * 60 }) => {
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [selectedAnswerId, setSelectedAnswerId] = useState<string | null>(null);
+  const [isAnswered, setIsAnswered] = useState(false);
+  const [score, setScore] = useState(0);
+  const [showResults, setShowResults] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(totalTimeSeconds);
+
+  // --- State for User Answers ---
+  const [userAnswers, setUserAnswers] = useState<UserAnswers>(() => {
+    const savedAnswers = localStorage.getItem(QUIZ_ANSWERS_KEY);
+    try {
+        // 保存されたデータがあればパース、なければ空オブジェクト
+        return savedAnswers ? JSON.parse(savedAnswers) : {};
+    } catch (e) {
+        console.error("Failed to parse answers from localStorage", e);
+        return {}; // パース失敗時も空オブジェクト
+    }
+  });
+
+  const currentQuestion = questions[currentQuestionIndex];
+  const totalQuestions = questions.length;
+
+  // --- Restore state based on saved answers ---
+   useEffect(() => {
+    // コンポーネントマウント時に、現在の問題に対する保存された回答があれば復元
+    const savedAnswerForCurrent = userAnswers[currentQuestion?.id];
+    if (savedAnswerForCurrent !== undefined && savedAnswerForCurrent !== null) {
+      setSelectedAnswerId(savedAnswerForCurrent);
+      setIsAnswered(true); // 回答済み状態にする
+       // スコアも復元する必要があるが、ここでは単純化のため省略
+       // 正確なスコア復元は全問チェックが必要
+    } else {
+        // 新しい問題または未回答の問題の場合はリセット
+        setSelectedAnswerId(null);
+        setIsAnswered(false);
+    }
+  }, [currentQuestionIndex, currentQuestion?.id, userAnswers]); // currentQuestion.id も依存配列に追加
+
+  // --- Update Score based on all answers (needed for accurate score restoration) ---
+  useEffect(() => {
+      let calculatedScore = 0;
+      questions.forEach(q => {
+          if (userAnswers[q.id] && userAnswers[q.id] === q.correctAnswerId) {
+              calculatedScore++;
+          }
+      });
+      setScore(calculatedScore);
+  }, [userAnswers, questions]);
+
+
+  // Timer Effect (変更なし)
+  useEffect(() => {
+    if (showResults || timeLeft <= 0) return;
+    const timerId = setInterval(() => {
+      setTimeLeft((prevTime) => Math.max(0, prevTime - 1)); // 0未満にならないように
+    }, 1000);
+    return () => clearInterval(timerId);
+  }, [showResults, timeLeft]);
+
+  useEffect(() => {
+    if (timeLeft <= 0 && !showResults) {
+      setShowResults(true);
+      // 時間切れ時に現在の回答状況を最終保存
+      saveAnswers();
+    }
+  }, [timeLeft, showResults]); // showResults も依存配列に追加
+
+  // --- Function to Save Answers ---
+  const saveAnswers = useCallback(() => {
+    // selectedAnswerId が null でない（何か選択されている）場合のみ保存対象とする
+    // isAnswered フラグも考慮に入れる
+    if (currentQuestion && isAnswered && selectedAnswerId !== null) {
+        const updatedAnswers = {
+            ...userAnswers,
+            [currentQuestion.id]: selectedAnswerId,
+        };
+        setUserAnswers(updatedAnswers); // stateを更新
+        try {
+            localStorage.setItem(QUIZ_ANSWERS_KEY, JSON.stringify(updatedAnswers)); // ローカルストレージに保存
+        } catch (e) {
+            console.error("Failed to save answers to localStorage", e);
+            // ここでユーザーに通知するなどのエラーハンドリングも可能
+        }
+    } else if (currentQuestion && !isAnswered) {
+        // ユーザーが回答せずに次に進んだ場合（または時間切れ）、
+        // 未回答として記録するかどうか。ここでは記録しない方針。
+        // 必要であれば null を保存するロジックを追加。
+         const updatedAnswers = { ...userAnswers };
+         // 既存の回答がなければ null を設定するか、何もしないか選択
+         // if (updatedAnswers[currentQuestion.id] === undefined) {
+         //   updatedAnswers[currentQuestion.id] = null;
+         // }
+         // setUserAnswers(updatedAnswers);
+         // localStorage.setItem(QUIZ_ANSWERS_KEY, JSON.stringify(updatedAnswers));
+    }
+  }, [userAnswers, currentQuestion, selectedAnswerId, isAnswered]); // 依存関係を明確化
+
+  const handleAnswerSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isAnswered) {
+      const answerId = event.target.value;
+      setSelectedAnswerId(answerId);
+      setIsAnswered(true); // これが呼ばれた直後に保存処理が走るようにする
+
+      // --- 正誤判定とスコア更新は handleNextQuestion か useEffect でまとめて行う方が良いかも ---
+      // ここで即時スコア更新すると、画面遷移前に一瞬古いスコアが見える可能性がある
+      // if (answerId === currentQuestion.correctAnswerId) {
+      //   // スコアは useEffect で userAnswers から再計算する方針に変更
+      // }
+    }
+  };
+
+   // --- Next Question Handler ---
+   const handleNextQuestion = () => {
+     // 現在の回答を保存
+     saveAnswers();
+
+     if (currentQuestionIndex < totalQuestions - 1) {
+       setCurrentQuestionIndex((prevIndex) => prevIndex + 1);
+       // 次の問題の回答状態リセットは useEffect で行うため、ここでは不要
+       // setSelectedAnswerId(null);
+       // setIsAnswered(false);
+     } else {
+       // Last question answered, show results
+       setShowResults(true);
+     }
+   };
+
+  // --- Format Time (変更なし) ---
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  // --- Get Option Style (変更なし) ---
+  const getOptionStyle = (optionId: string) => {
+    if (!isAnswered) return { mb: 1 }; // Add margin bottom for spacing even before answer
+
+    const isCorrect = optionId === currentQuestion.correctAnswerId;
+    const isSelected = optionId === selectedAnswerId;
+
+    const baseStyle = {
+        borderRadius: '4px',
+        mb: 1,
+        pointerEvents: isAnswered ? 'none' : 'auto', // Disable further clicks after answer
+        border: '1px solid transparent', // Add transparent border initially
+    } as const; // Assert type for sx prop
+
+    if (isCorrect) {
+      return {
+        ...baseStyle,
+        backgroundColor: 'rgba(76, 175, 80, 0.2)', // Light Greenish
+        border: '1px solid green',
+      };
+    } else if (isSelected && !isCorrect) {
+      return {
+        ...baseStyle,
+        backgroundColor: 'rgba(244, 67, 54, 0.2)', // Light Reddish
+        border: '1px solid red',
+      };
+    } else {
+      // Default style for unselected/incorrect options after feedback is shown
+       return baseStyle;
+    }
+  };
+
+  // --- Get Option Icon (変更なし) ---
+   const getOptionIcon = (optionId: string) => {
+    if (!isAnswered) return null;
+    const isCorrect = optionId === currentQuestion.correctAnswerId;
+    const isSelected = optionId === selectedAnswerId;
+    if (isCorrect) return <CheckCircleOutline sx={{ color: 'green', ml: 1 }} />;
+    if (isSelected && !isCorrect) return <HighlightOff sx={{ color: 'red', ml: 1 }} />;
+    return null;
+  }
+
+  // --- Render Logic ---
+
+  // 結果表示画面
+  if (showResults) {
+    // ローカルストレージから最終結果を読み込む（最新状態を保証するため）
+     const finalAnswers: UserAnswers = JSON.parse(localStorage.getItem(QUIZ_ANSWERS_KEY) || '{}');
+     // スコアも最終結果から再計算 (useEffectでも計算されるが念のため)
+     const finalScore = questions.reduce((acc, q) => {
+         return finalAnswers[q.id] === q.correctAnswerId ? acc + 1 : acc;
+     }, 0);
+
+    return (
+      <Container maxWidth="sm" sx={{ mt: 4, textAlign: 'center' }}>
+        <Typography variant="h4" gutterBottom>
+          試験終了！
+        </Typography>
+        <Typography variant="h6">
+          あなたのスコア: {finalScore} / {totalQuestions}
+        </Typography>
+        <Typography variant="body1" sx={{ mt: 1 }}>
+          所要時間: {formatTime(totalTimeSeconds - timeLeft)} (残り時間: {formatTime(timeLeft)})
+        </Typography>
+
+        {/* === 正誤表コンポーネントを表示 === */}
+        <ResultsTable questions={questions} userAnswers={finalAnswers} />
+
+        <Button
+            variant="contained"
+            sx={{ mt: 4 }} // マージン調整
+            onClick={() => {
+                localStorage.removeItem(QUIZ_ANSWERS_KEY); // 回答履歴をクリア
+                window.location.reload(); // ページをリロードして試験を最初から
+            }}>
+          もう一度挑戦する
+        </Button>
+      </Container>
+    );
+  }
+
+  // 試験中の画面 (変更は少ない)
+  if (!currentQuestion) {
+     return <Typography>問題を読み込んでいます...</Typography>;
+  }
+
+  const progressValue = ((currentQuestionIndex + 1) / totalQuestions) * 100;
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', backgroundColor: '#004d40' }}>
+      <AppBar position="static" sx={{ backgroundColor: '#00695c' }}>
+        <Toolbar>
+          <IconButton edge="start" color="inherit" aria-label="back" onClick={() => { /* 戻る機能の実装 */ }}>
+            <ArrowBackIcon />
+          </IconButton>
+          <Typography variant="h6" component="div" sx={{ flexGrow: 1, textAlign: 'center' }}>
+            {quizTitle}
+          </Typography>
+          <Box sx={{width: 40}} /> {/* 右側のスペース確保 */}
+        </Toolbar>
+      </AppBar>
+
+       <Box sx={{ width: '100%', px: 2, pt: 2 }}>
+         <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+            <LinearProgress
+             variant="determinate" value={progressValue}
+             sx={{ flexGrow: 1, height: 10, borderRadius: 5, mr: 2, backgroundColor: 'rgba(255,255,255,0.3)', '& .MuiLinearProgress-bar': { backgroundColor: '#ffeb3b' }}}
+            />
+           <Typography variant="body2" sx={{ color: 'white', minWidth: '60px', textAlign: 'right' }}>
+             {formatTime(timeLeft)}
+           </Typography>
+         </Box>
+         <Typography variant="body1" sx={{ color: 'rgba(255,255,255,0.8)', mb: 2 }}>
+           Question {currentQuestionIndex + 1} / {totalQuestions}
+         </Typography>
+       </Box>
+
+      <Container maxWidth="sm" sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', py: 2 }}>
+        <Fade in={true} key={currentQuestion.id} timeout={500}>
+        <Card sx={{ borderRadius: 3, boxShadow: 3, width: '100%' /* Ensure card takes full width */ }}>
+          <CardContent sx={{ p: { xs: 2, sm: 3 } /* Responsive padding */ }}>
+            <Typography variant="h6" component="div" sx={{ mb: 3, fontWeight: 'medium', minHeight: '3em' /* Ensure consistent height */ }}>
+              {currentQuestion.questionText}
+            </Typography>
+
+            <RadioGroup value={selectedAnswerId} onChange={handleAnswerSelect}>
+              {currentQuestion.options.map((option) => (
+                <Box key={option.id} sx={getOptionStyle(option.id)} >
+                   <FormControlLabel
+                    value={option.id}
+                    control={<Radio disabled={isAnswered} sx={{ '&.Mui-disabled': { color: isAnswered ? (option.id === currentQuestion.correctAnswerId ? 'green' : (option.id === selectedAnswerId ? 'red' : undefined)) : undefined } }} />}
+                    label={
+                        <Box sx={{display: 'flex', alignItems: 'center', width: '100%'}}>
+                             <Typography sx={{ flexGrow: 1 }}>{option.text}</Typography>
+                             {getOptionIcon(option.id)}
+                        </Box>
+                    }
+                    sx={{ width: '100%', m: 0, p: 1.5 }}
+                    disabled={isAnswered}
+                   />
+                </Box>
+              ))}
+            </RadioGroup>
+
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 3 }}>
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleNextQuestion}
+                disabled={!isAnswered} // 回答するまでNextボタンは非活性
+                endIcon={<ArrowForward />} // アイコン変更
+              >
+                {currentQuestionIndex === totalQuestions - 1 ? '終了' : '次へ'}
+              </Button>
+            </Box>
+          </CardContent>
+        </Card>
+        </Fade>
+      </Container>
+    </Box>
+  );
+};
+
+export default Quiz;
+Use code with caution.
+TypeScript
+変更点のまとめ:
+回答履歴の管理: userAnswers state を導入し、ローカルストレージ (quizAnswers キー) から読み込み/書き込みを行います。
+状態復元: ページ読み込み時や問題移動時に、ローカルストレージの回答履歴に基づいて選択状態と回答済み状態 (selectedAnswerId, isAnswered) を復元するようにしました。これにより、ブラウザを閉じても途中から再開できます（タイマーはリセットされます）。スコアも userAnswers から再計算するように変更しました。
+回答の保存: handleNextQuestion が呼ばれたタイミング、および時間切れ時に saveAnswers 関数を呼び出して、現在の回答をローカルストレージに保存します。
+正誤表コンポーネント: ResultsTable.tsx を作成し、問題リスト (questions) とユーザーの回答履歴 (userAnswers) を受け取って、指定された形式の正誤表を表示します。
+結果画面への統合: Quiz.tsx の結果表示部分 (showResults が true の場合) で、ローカルストレージから最終的な回答を読み込み、ResultsTable を呼び出して表示します。
+リトライ処理: 「もう一度挑戦する」ボタンに、ローカルストレージの回答履歴を削除する処理 (localStorage.removeItem) を追加しました。
+これで、試験終了後に正誤表が表示され、ユーザーは自分の回答結果を問題ごとに確認できるようになりました。また、ローカルストレージを使用しているため、試験途中でブラウザを閉じても、再度開いたときに回答状況が（タイマーを除き）復元されます。
+Generated Image April 16, 2025 - 2:09PM.png
+これまでのコードはいい感じですが、各コンポーネント間でデザインの統一ができていません。
+添付した画像を参考にデザインと配色を統一するようApp.tsx、Quiz.tsx、Login.tsx、ResultsTable.tsxなどのコードを修正してください。
+ThinkingThoughts
+The thoughts produced by the model are experimental
+Expand to view model thoughts
+chevron_right
+はい、承知いたしました。作成した React プロジェクトをビルドし、AWS Amplify を利用してデプロイする手順を以下に示します。
+AWS Amplify Hosting は、静的ウェブサイトやシングルページアプリケーション（SPA）を簡単かつ迅速にデプロイ、ホストするためのフルマネージドサービスです。CI/CD（継続的インテグレーション/継続的デリバリー）パイプラインも組み込まれています。
+前提条件:
+AWS アカウント: AWS Amplify を利用するには、AWS アカウントが必要です。持っていない場合は作成してください。
+Git リポジトリ: プロジェクトのコードが GitHub, GitLab, Bitbucket, AWS CodeCommit などの Git リポジトリで管理されていることが推奨されます（CI/CD のため）。まだの場合は、プロジェクトを Git リポジトリにプッシュしてください。
+Node.js と npm: プロジェクトのビルドに必要な環境がローカルにセットアップされていること。
+手順:
+ステップ 1: プロジェクトの準備とビルド
+最終確認: ローカル環境でアプリケーションが期待通りに動作することを確認します。
+npm run dev
+Use code with caution.
+Bash
+ブラウザでアクセスし、ログイン画面、クイズ画面、結果表示などをテストします。
+コードのコミットとプッシュ: 最新のコード変更を Git リポジトリにコミットし、プッシュします。
+git add .
+git commit -m "Prepare for Amplify deployment"
+git push origin <your-branch-name> #例: main または master
+Use code with caution.
+Bash
+ローカルでのビルド (任意ですが確認のため推奨): プロジェクトを本番用にビルドします。これにより、dist ディレクトリ（Vite のデフォルト）に最適化された静的ファイルが生成されます。
+npm run build
+Use code with caution.
+Bash
+ビルドが成功することを確認します。dist ディレクトリが作成されているはずです。
+ステップ 2: AWS Amplify Console でのセットアップ
+AWS マネジメントコンソールにログイン: AWS アカウントでコンソールにサインインします。
+Amplify サービスへ移動: 検索バーで「Amplify」と入力し、AWS Amplify サービスページに移動します。
+新しいアプリケーションの作成:
+Amplify コンソールの「すべてのアプリ」画面で、「New app」をクリックし、「Host web app」を選択します。
+コードリポジトリの接続:
+コードがホストされている Git プロバイダー（GitHub, GitLab, Bitbucket, AWS CodeCommit）を選択します。
+画面の指示に従い、AWS Amplify がリポジトリにアクセスすることを承認します。（例: GitHub の場合、リポジトリを選択して Amplify アプリをインストールします）。
+接続したいリポジトリと、デプロイしたいブランチ（例: main）を選択し、「次へ」をクリックします。
+ビルド設定の構成:
+Amplify は通常、プロジェクトの種類（React/Vite）を自動検出し、基本的なビルド設定を提案します。内容を確認し、必要に応じて修正します。
+重要: ビルド設定（amplify.yml）が以下のようになっていることを確認します。
+Base Directory (基本ディレクトリ): dist （Vite のビルド出力ディレクトリ）
+Build Command (ビルドコマンド): npm run build
+Install Command (インストールコマンド): npm ci (CI環境では npm install より推奨) または npm install
+「Edit」ボタンをクリックしてビルド設定を確認・編集できます。基本的な amplify.yml の例は以下のようになります。
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - npm ci # または npm install
+    build:
+      commands:
+        - npm run build
+  artifacts:
+    baseDirectory: dist # ここが Vite の出力ディレクトリ
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
+Use code with caution.
+Yaml
+環境変数: もしアプリケーションで環境変数（APIキーなど）を使用している場合は、「Environment variables」セクションで設定できます。（今回のアプリでは今のところ不要です）。
+設定を確認したら「次へ」をクリックします。
+確認とデプロイ:
+設定内容を確認し、問題がなければ「Save and deploy」をクリックします。
+ステップ 3: デプロイの実行と確認
+デプロイプロセス: 「Save and deploy」をクリックすると、Amplify は以下のプロセスを開始します。
+Provision: デプロイに必要なインフラストラクチャを準備します。
+Build: リポジトリからコードをクローンし、指定されたビルドコマンド (npm ci, npm run build) を実行します。
+Deploy: ビルドされたアーティファクト (dist ディレクトリの中身）をグローバルな CDN (Content Delivery Network) にデプロイします。
+Amplify コンソールで各ステップの進行状況を確認できます。ビルド中にエラーが発生した場合は、ログを確認して原因を特定します。
+デプロイ完了: デプロイが成功すると、緑色のチェックマークが表示され、アプリケーションにアクセスするための URL (https://<branch-name>.<app-id>.amplifyapp.com のような形式）が提供されます。
+動作確認: 提供された URL にブラウザでアクセスし、デプロイされたアプリケーションが期待通りに動作するか（ログイン、クイズ実行、結果表示など）を確認します。
+ステップ 4: (オプション) カスタムドメインの設定
+必要であれば、Amplify コンソールの「Domain management」セクションから、amplifyapp.com のドメインではなく、独自のカスタムドメイン（例: my-quiz-app.com）を設定できます。
+CI/CD について
+Git リポジトリを接続した場合、指定したブランチ（例: main）に新しいコードをプッシュするたびに、Amplify は自動的に変更を検出し、ビルドとデプロイのプロセスを再実行します。これにより、常に最新バージョンのアプリケーションがデプロイされるようになります。
+トラブルシューティング:
+ビルド失敗: Amplify コンソールのビルドログを確認し、エラーメッセージを読んで原因を特定します。よくある原因は、依存関係の不足、ビルドコマンドのエラー、環境変数の設定ミスなどです。
+表示の崩れ: ローカルでのビルド (npm run build 後に dist を確認）とデプロイ後の表示に差異がある場合、ビルドプロセスやファイルパスの問題を疑います。
+これで、React プロジェクトが AWS Amplify を利用してデプロイされ、公開された状態になります。
